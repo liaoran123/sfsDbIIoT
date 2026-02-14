@@ -1,0 +1,37 @@
+# 智能工厂设备监控系统配置文件
+
+# 数据库配置
+database:
+  path: "./data"           # 数据存储路径
+  max_open: 10              # 最大打开连接数
+  max_idle: 5               # 最大空闲连接数
+  cache_size: 1024          # 缓存大小（MB）
+
+# 设备配置
+device:
+  max_devices: 1000         # 最大设备数量
+  scan_interval: 60         # 设备扫描间隔（秒）
+
+# 传感器配置
+sensor:
+  max_sensors_per_device: 20  # 每设备最大传感器数量
+  data_interval: 1           # 数据采集间隔（秒）
+  batch_size: 100            # 批处理大小
+
+# 分析配置
+analytics:
+  enabled: true              # 是否启用分析
+  aggregation_window: "5m"   # 聚合窗口
+  prediction_enabled: false   # 是否启用预测
+
+# 告警配置
+alert:
+  enabled: true              # 是否启用告警
+  check_interval: 30         # 告警检查间隔（秒）
+  notification_type: "log"   # 通知类型（log, email, webhook）
+
+# API配置
+api:
+  enabled: true              # 是否启用API
+  port: "8080"              # API端口
+  cors: true                 # 是否启用CORS
