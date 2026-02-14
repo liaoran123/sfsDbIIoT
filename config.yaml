@@ -6,6 +6,8 @@ database:
   max_open: 10              # 最大打开连接数
   max_idle: 5               # 最大空闲连接数
   cache_size: 1024          # 缓存大小（MB）
+  use_compression: true     # 是否启用数据压缩
+  compression_type: "delta"  # 压缩类型（delta, rle）
 
 # 设备配置
 device:

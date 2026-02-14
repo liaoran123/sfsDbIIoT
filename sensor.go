@@ -19,15 +19,15 @@ type SensorData struct {
 
 // SensorDataBatch 传感器数据批处理结构体
 type SensorDataBatch struct {
-	Data     []*SensorData
+	Data      []*SensorData
 	BatchSize int
-	mutex    sync.Mutex
+	mutex     sync.Mutex
 }
 
 // NewSensorDataBatch 创建传感器数据批处理实例
 func NewSensorDataBatch(batchSize int) *SensorDataBatch {
 	return &SensorDataBatch{
-		Data:     make([]*SensorData, 0, batchSize),
+		Data:      make([]*SensorData, 0, batchSize),
 		BatchSize: batchSize,
 	}
 }
@@ -36,7 +36,7 @@ func NewSensorDataBatch(batchSize int) *SensorDataBatch {
 func (batch *SensorDataBatch) AddData(data *SensorData) bool {
 	batch.mutex.Lock()
 	defer batch.mutex.Unlock()
-	
+
 	batch.Data = append(batch.Data, data)
 	return len(batch.Data) >= batch.BatchSize
 }
@@ -45,7 +45,7 @@ func (batch *SensorDataBatch) AddData(data *SensorData) bool {
 func (batch *SensorDataBatch) GetBatch() []*SensorData {
 	batch.mutex.Lock()
 	defer batch.mutex.Unlock()
-	
+
 	data := batch.Data
 	batch.Data = make([]*SensorData, 0, batch.BatchSize)
 	return data
@@ -90,7 +90,7 @@ func (processor *SensorDataProcessor) Start() error {
 	}
 	processor.isRunning = true
 	processor.mutex.Unlock()
-	
+
 	go processor.processLoop()
 	fmt.Println("Sensor data processor started")
 	return nil
@@ -105,7 +105,7 @@ func (processor *SensorDataProcessor) Stop() error {
 	}
 	processor.isRunning = false
 	processor.mutex.Unlock()
-	
+
 	close(processor.stopChan)
 	fmt.Println("Sensor data processor stopped")
 	return nil
@@ -115,7 +115,7 @@ func (processor *SensorDataProcessor) Stop() error {
 func (processor *SensorDataProcessor) processLoop() {
 	ticker := time.NewTicker(time.Duration(processor.dataInterval) * time.Second)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ticker.C:
@@ -134,18 +134,62 @@ func (processor *SensorDataProcessor) processBatch() {
 	if len(batch) == 0 {
 		return
 	}
-	
+
 	// 处理数据
 	processedData := processor.processData(batch)
-	
-	// 存储数据
+
+	// 存储数据 - 使用批量插入
 	if processor.storage != nil {
-		err := processor.storage.StoreSensorDataBatch(processedData)
-		if err != nil {
-			fmt.Printf("Error storing sensor data batch: %v\n", err)
+		// 根据数据量选择不同的批量插入策略
+		const largeBatchThreshold = 1000
+		if len(processedData) > largeBatchThreshold {
+			// 对于大批量数据，使用分批处理
+			const batchSize = 500
+			err := processor.storage.StoreSensorDataBatchWithSize(processedData, batchSize)
+			if err != nil {
+				fmt.Printf("Error storing sensor data batch with size: %v\n", err)
+			}
+		} else {
+			// 对于小批量数据，直接使用批量插入
+			err := processor.storage.StoreSensorDataBatch(processedData)
+			if err != nil {
+				fmt.Printf("Error storing sensor data batch: %v\n", err)
+			}
+		}
+
+		// 如果启用了压缩，对数据进行压缩存储
+		if len(processedData) > 0 {
+			// 按设备和传感器分组压缩
+			dataByDeviceSensor := make(map[string]map[string][]*SensorData)
+			for _, data := range processedData {
+				if _, ok := dataByDeviceSensor[data.DeviceID]; !ok {
+					dataByDeviceSensor[data.DeviceID] = make(map[string][]*SensorData)
+				}
+				dataByDeviceSensor[data.DeviceID][data.SensorID] = append(dataByDeviceSensor[data.DeviceID][data.SensorID], data)
+			}
+
+			// 对每组数据进行压缩存储
+			for deviceID, sensors := range dataByDeviceSensor {
+				for sensorID, data := range sensors {
+					// 压缩数据
+					compressed, err := processor.storage.CompressSensorData(data)
+					if err != nil {
+						fmt.Printf("Error compressing sensor data: %v\n", err)
+						continue
+					}
+
+					// 存储压缩数据
+					if compressed != nil {
+						err = processor.storage.StoreCompressedSensorData(deviceID, sensorID, compressed)
+						if err != nil {
+							fmt.Printf("Error storing compressed sensor data: %v\n", err)
+						}
+					}
+				}
+			}
 		}
 	}
-	
+
 	// 更新设备和传感器状态
 	processor.updateDeviceSensorStatus(processedData)
 }
@@ -153,23 +197,23 @@ func (processor *SensorDataProcessor) processBatch() {
 // processData 处理传感器数据
 func (processor *SensorDataProcessor) processData(data []*SensorData) []*SensorData {
 	processedData := make([]*SensorData, 0, len(data))
-	
+
 	for _, item := range data {
 		// 验证数据
 		if !processor.validateData(item) {
 			fmt.Printf("Invalid sensor data: %v\n", item)
 			continue
 		}
-		
+
 		// 数据转换和标准化
 		processedItem := processor.normalizeData(item)
-		
+
 		// 数据质量检查
 		processedItem.Quality = processor.checkDataQuality(processedItem)
-		
+
 		processedData = append(processedData, processedItem)
 	}
-	
+
 	return processedData
 }
 
@@ -179,24 +223,24 @@ func (processor *SensorDataProcessor) validateData(data *SensorData) bool {
 	if data.DeviceID == "" || data.SensorID == "" {
 		return false
 	}
-	
+
 	// 检查时间戳
 	if data.Timestamp.IsZero() {
 		data.Timestamp = time.Now()
 	}
-	
+
 	// 检查设备是否存在
 	_, err := processor.deviceManager.GetDevice(data.DeviceID)
 	if err != nil {
 		return false
 	}
-	
+
 	// 检查传感器是否存在
 	_, err = processor.deviceManager.GetSensor(data.DeviceID, data.SensorID)
 	if err != nil {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -207,7 +251,7 @@ func (processor *SensorDataProcessor) normalizeData(data *SensorData) *SensorDat
 	if err != nil {
 		return data
 	}
-	
+
 	// 确保值在有效范围内
 	if data.Value < sensor.MinValue {
 		data.Value = sensor.MinValue
@@ -215,7 +259,7 @@ func (processor *SensorDataProcessor) normalizeData(data *SensorData) *SensorDat
 	if data.Value > sensor.MaxValue {
 		data.Value = sensor.MaxValue
 	}
-	
+
 	return data
 }
 
@@ -223,33 +267,33 @@ func (processor *SensorDataProcessor) normalizeData(data *SensorData) *SensorDat
 func (processor *SensorDataProcessor) checkDataQuality(data *SensorData) int {
 	// 基础质量分数
 	quality := 100
-	
+
 	// 获取传感器信息
 	sensor, err := processor.deviceManager.GetSensor(data.DeviceID, data.SensorID)
 	if err != nil {
 		return 0
 	}
-	
+
 	// 检查值是否在有效范围内
 	if data.Value < sensor.MinValue || data.Value > sensor.MaxValue {
 		quality -= 50
 	}
-	
+
 	// 检查值是否接近阈值
 	if abs(data.Value-sensor.Threshold) < (sensor.MaxValue-sensor.MinValue)*0.1 {
 		quality -= 20
 	}
-	
+
 	// 检查时间戳是否合理（不超过5分钟）
 	if time.Since(data.Timestamp) > 5*time.Minute {
 		quality -= 30
 	}
-	
+
 	// 确保质量分数在0-100之间
 	if quality < 0 {
 		quality = 0
 	}
-	
+
 	return quality
 }
 
@@ -261,7 +305,7 @@ func (processor *SensorDataProcessor) updateDeviceSensorStatus(data []*SensorDat
 		if err != nil {
 			fmt.Printf("Error updating sensor value: %v\n", err)
 		}
-		
+
 		// 更新设备状态为在线
 		err = processor.deviceManager.UpdateDeviceStatus(item.DeviceID, DeviceStatusOnline)
 		if err != nil {
@@ -274,22 +318,22 @@ func (processor *SensorDataProcessor) updateDeviceSensorStatus(data []*SensorDat
 func (processor *SensorDataProcessor) ProcessSensorData(data *SensorData) error {
 	// 添加到批次
 	batchFull := processor.batch.AddData(data)
-	
+
 	// 如果批次满了，立即处理
 	if batchFull {
 		processor.processBatch()
 	}
-	
+
 	return nil
 }
 
 // GetProcessingStats 获取处理统计信息
 func (processor *SensorDataProcessor) GetProcessingStats() map[string]interface{} {
 	return map[string]interface{}{
-		"batch_size":      processor.batch.BatchSize,
-		"current_batch":   processor.batch.GetSize(),
-		"data_interval":   processor.dataInterval,
-		"is_running":      processor.isRunning,
+		"batch_size":    processor.batch.BatchSize,
+		"current_batch": processor.batch.GetSize(),
+		"data_interval": processor.dataInterval,
+		"is_running":    processor.isRunning,
 	}
 }
 

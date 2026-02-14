@@ -12,15 +12,17 @@ import (
 
 // StorageManager 存储管理器
 type StorageManager struct {
-	deviceTable *engine.Table
-	sensorTable *engine.Table
-	dataTable   *engine.Table
-	path        string
-	cacheSize   int
+	deviceTable     *engine.Table
+	sensorTable     *engine.Table
+	dataTable       *engine.Table
+	path            string
+	cacheSize       int
+	useCompression  bool
+	compressionType string
 }
 
 // NewStorageManager 创建存储管理器
-func NewStorageManager(path string, cacheSize int) (*StorageManager, error) {
+func NewStorageManager(path string, cacheSize int, useCompression bool, compressionType string) (*StorageManager, error) {
 	// 确保数据目录存在
 	err := os.MkdirAll(path, 0755)
 	if err != nil {
@@ -36,8 +38,10 @@ func NewStorageManager(path string, cacheSize int) (*StorageManager, error) {
 
 	// 创建存储管理器
 	manager := &StorageManager{
-		path:      path,
-		cacheSize: cacheSize,
+		path:            path,
+		cacheSize:       cacheSize,
+		useCompression:  useCompression,
+		compressionType: compressionType,
 	}
 
 	// 初始化表结构
@@ -132,13 +136,17 @@ func (sm *StorageManager) initTables() error {
 
 	// 设置传感器数据表字段
 	dataFields := map[string]any{
-		"id":        "",
-		"device_id": "",
-		"sensor_id": "",
-		"value":     0.0,
-		"timestamp": time.Time{},
-		"quality":   0,
-		"raw_data":  "",
+		"id":               "",
+		"device_id":        "",
+		"sensor_id":        "",
+		"value":            0.0,
+		"timestamp":        time.Time{},
+		"quality":          0,
+		"raw_data":         "",
+		"compressed_data":  []byte{},
+		"start_time":       time.Time{},
+		"interval":         time.Duration(0),
+		"compression_type": "",
 	}
 	err = dataTable.SetFields(dataFields)
 	if err != nil {
@@ -155,6 +163,19 @@ func (sm *StorageManager) initTables() error {
 	if err != nil {
 		return fmt.Errorf("failed to create sensor_data table index: %v", err)
 	}
+
+	// 创建device_id和sensor_id的索引，以提高查询性能
+	deviceSensorIndex, err := engine.DefaultNormalIndexNew("device_sensor_idx")
+	if err != nil {
+		return fmt.Errorf("failed to create device_sensor index: %v", err)
+	}
+	deviceSensorIndex.AddFields("device_id")
+	deviceSensorIndex.AddFields("sensor_id")
+	err = dataTable.CreateIndex(deviceSensorIndex)
+	if err != nil {
+		return fmt.Errorf("failed to create device_sensor index: %v", err)
+	}
+
 	sm.dataTable = dataTable
 
 	return nil
@@ -232,8 +253,9 @@ func (sm *StorageManager) StoreSensorDataBatch(data []*SensorData) error {
 		return nil
 	}
 
-	// 批量插入数据
-	for _, item := range data {
+	// 构建批量插入记录
+	records := make([]*map[string]any, len(data))
+	for i, item := range data {
 		record := map[string]any{
 			"id":        item.ID,
 			"device_id": item.DeviceID,
@@ -243,14 +265,47 @@ func (sm *StorageManager) StoreSensorDataBatch(data []*SensorData) error {
 			"quality":   item.Quality,
 			"raw_data":  item.RawData,
 		}
-
-		_, err := sm.dataTable.Insert(&record)
-		if err != nil {
-			return fmt.Errorf("failed to store sensor data: %v", err)
-		}
+		records[i] = &record
 	}
 
-	fmt.Printf("Stored %d sensor data records\n", len(data))
+	// 使用 sfsDb 的批量插入 API
+	_, err := sm.dataTable.BatchInsert(records)
+	if err != nil {
+		return fmt.Errorf("failed to batch store sensor data: %v", err)
+	}
+
+	fmt.Printf("Stored %d sensor data records in batch\n", len(data))
+	return nil
+}
+
+// StoreSensorDataBatchWithSize 带大小参数的批量存储传感器数据
+func (sm *StorageManager) StoreSensorDataBatchWithSize(data []*SensorData, batchSize int) error {
+	if len(data) == 0 {
+		return nil
+	}
+
+	// 构建批量插入记录
+	records := make([]*map[string]any, len(data))
+	for i, item := range data {
+		record := map[string]any{
+			"id":        item.ID,
+			"device_id": item.DeviceID,
+			"sensor_id": item.SensorID,
+			"value":     item.Value,
+			"timestamp": item.Timestamp,
+			"quality":   item.Quality,
+			"raw_data":  item.RawData,
+		}
+		records[i] = &record
+	}
+
+	// 使用 sfsDb 的带大小参数的批量插入 API
+	_, err := sm.dataTable.BatchInsertWithSize(records, batchSize)
+	if err != nil {
+		return fmt.Errorf("failed to batch store sensor data with size: %v", err)
+	}
+
+	fmt.Printf("Stored %d sensor data records in batch with size %d\n", len(data), batchSize)
 	return nil
 }
 
@@ -454,7 +509,9 @@ func (sm *StorageManager) Close() error {
 func (sm *StorageManager) GetStats() (map[string]interface{}, error) {
 	// 构建统计信息
 	stats := map[string]interface{}{
-		"path": sm.path,
+		"path":             sm.path,
+		"use_compression":  sm.useCompression,
+		"compression_type": sm.compressionType,
 		"tables": map[string]interface{}{
 			"devices": map[string]interface{}{
 				"name": "devices",
@@ -469,4 +526,124 @@ func (sm *StorageManager) GetStats() (map[string]interface{}, error) {
 	}
 
 	return stats, nil
+}
+
+// CompressSensorData 压缩传感器数据
+func (sm *StorageManager) CompressSensorData(data []*SensorData) (*sfstime.CompressedTimeSeries, error) {
+	if !sm.useCompression || len(data) == 0 {
+		return nil, nil
+	}
+
+	// 转换为 TimeSeriesPoint
+	points := make([]sfstime.TimeSeriesPoint, len(data))
+	for i, item := range data {
+		points[i] = sfstime.TimeSeriesPoint{
+			Time:  item.Timestamp,
+			Value: item.Value,
+		}
+	}
+
+	// 计算时间间隔
+	var interval time.Duration
+	if len(points) > 1 {
+		interval = points[1].Time.Sub(points[0].Time)
+	}
+
+	// 压缩数据
+	compressed, err := sfstime.CompressTimeSeries(points, sm.compressionType, interval)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compress sensor data: %v", err)
+	}
+
+	return compressed, nil
+}
+
+// DecompressSensorData 解压缩传感器数据
+func (sm *StorageManager) DecompressSensorData(compressed *sfstime.CompressedTimeSeries, count int) ([]sfstime.TimeSeriesPoint, error) {
+	if compressed == nil {
+		return []sfstime.TimeSeriesPoint{}, nil
+	}
+
+	// 解压缩数据
+	points, err := sfstime.DecompressTimeSeries(compressed, count)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress sensor data: %v", err)
+	}
+
+	return points, nil
+}
+
+// StoreCompressedSensorData 存储压缩后的传感器数据
+func (sm *StorageManager) StoreCompressedSensorData(deviceID, sensorID string, compressed *sfstime.CompressedTimeSeries) error {
+	if compressed == nil {
+		return nil
+	}
+
+	// 构建记录
+	record := map[string]any{
+		"id":               fmt.Sprintf("%s_%s_%d", deviceID, sensorID, time.Now().UnixNano()),
+		"device_id":        deviceID,
+		"sensor_id":        sensorID,
+		"compressed_data":  compressed.CompressedValues,
+		"start_time":       compressed.StartTime,
+		"interval":         compressed.Interval,
+		"compression_type": compressed.CompressionType,
+		"timestamp":        time.Now(),
+	}
+
+	// 插入记录
+	_, err := sm.dataTable.Insert(&record)
+	if err != nil {
+		return fmt.Errorf("failed to store compressed sensor data: %v", err)
+	}
+
+	return nil
+}
+
+// QueryCompressedSensorData 查询压缩后的传感器数据
+func (sm *StorageManager) QueryCompressedSensorData(deviceID, sensorID string, startTime, endTime time.Time) ([]*sfstime.CompressedTimeSeries, error) {
+	// 构建查询条件
+	conditions := map[string]any{
+		"device_id": deviceID,
+		"sensor_id": sensorID,
+	}
+
+	// 执行查询
+	iter, err := sm.dataTable.Search(&conditions)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query compressed sensor data: %v", err)
+	}
+	defer iter.Release()
+
+	// 处理结果
+	records := iter.GetRecords(true)
+	defer records.Release()
+
+	result := make([]*sfstime.CompressedTimeSeries, 0)
+
+	for _, record := range records {
+		// 检查时间范围
+		timestamp := record["timestamp"].(time.Time)
+		if timestamp.Before(startTime) || timestamp.After(endTime) {
+			continue
+		}
+
+		// 提取压缩数据
+		compressedValues := record["compressed_data"].([]byte)
+		startTime := record["start_time"].(time.Time)
+		interval := record["interval"].(time.Duration)
+		compressionType := record["compression_type"].(string)
+
+		// 构建压缩时间序列
+		cts := &sfstime.CompressedTimeSeries{
+			StartTime:        startTime,
+			Interval:         interval,
+			CompressedValues: compressedValues,
+			CompressionType:  compressionType,
+		}
+
+		result = append(result, cts)
+	}
+
+	return result, nil
 }
