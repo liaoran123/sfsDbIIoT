@@ -269,7 +269,7 @@ func (sm *StorageManager) StoreSensorDataBatch(data []*SensorData) error {
 	}
 
 	// 使用 sfsDb 的批量插入 API
-	_, err := sm.dataTable.BatchInsert(records)
+	_, err := sm.dataTable.BatchInsert(records) //_, err := sm.dataTable.BatchInsertNoInc(records,true) // 不自动递增主键，性能更好
 	if err != nil {
 		return fmt.Errorf("failed to batch store sensor data: %v", err)
 	}
@@ -300,7 +300,7 @@ func (sm *StorageManager) StoreSensorDataBatchWithSize(data []*SensorData, batch
 	}
 
 	// 使用 sfsDb 的带大小参数的批量插入 API
-	_, err := sm.dataTable.BatchInsertWithSize(records, batchSize)
+	_, err := sm.dataTable.BatchInsertWithSize(records, batchSize) //_, err := sm.dataTable.BatchInsertNoInc(records,true) // 不自动递增主键，性能更好
 	if err != nil {
 		return fmt.Errorf("failed to batch store sensor data with size: %v", err)
 	}
