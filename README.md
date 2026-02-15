@@ -253,6 +253,38 @@ MIT License
 
 欢迎提交Issue和Pull Request来改进这个项目。
 
+## 基准测试与性能报告
+
+本仓库包含针对 `sfsDb` 写入/查询与告警路径的基准测试实验，相关产物位于仓库根目录：
+
+- `bench_results.txt` / `bench_results_round2.txt` / `bench_results_round3.txt` - 各轮基准测试的控制台输出摘要
+- `bench_results_sustained_round1.txt` / `bench_results_sustained_round2.txt` - 持续写入测试输出（300s 并发 10）
+- `bench_sustained_metrics_round2.json` - 每 5 秒采样的运行时指标（JSON）
+- `bench_sustained_metrics_round2.csv` - 同上，CSV 格式，便于绘图
+- `bench_sustained_metrics_round2_summary.txt` - 采样统计摘要（min/mean/p50/p95/p99/max）
+
+下面是从持续写入测试（并发=10，持续=300s）生成的关键图表：
+
+Alloc / HeapAlloc (MB)
+
+![Alloc](./bench_alloc.png)
+
+Goroutines
+
+![Goroutines](./bench_goroutines.png)
+
+NumGC
+
+![NumGC](./bench_numgc.png)
+
+GC PauseTotal (ms)
+
+![PauseTotal](./bench_pause.png)
+
+简短结论：在本机和当前配置下，短时峰值测试显示非常高的写入吞吐，持续写入测试（5 分钟、并发 10）揭示系统的稳定吞吐约为 4k–4.5k ops/sec，内存中位 ~158MB，p95 峰值接近 342MB。详见上述 CSV/JSON 与摘要文件以作深入分析。
+
+如需进一步自动化对比（多并发/批量扫描）、生成 PDF 报告或禁用告警/日志后的对照试验，请打开 Issue 或联系维护者。
+
 ## 联系方式
 
 如有问题或建议，请通过以下方式联系：

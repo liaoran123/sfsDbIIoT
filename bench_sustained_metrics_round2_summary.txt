@@ -1,0 +1,34 @@
+Sustained metrics summary (generated: 2026-02-15T10:16:39+08:00)
+
+Alloc:
+  min: 95.86 MB
+  mean: 183.94 MB
+  p50: 157.72 MB
+  p95: 342.12 MB
+  p99: 396.43 MB
+  max: 396.43 MB
+
+HeapAlloc:
+  min: 95.86 MB
+  mean: 183.94 MB
+  p50: 157.72 MB
+  p95: 342.12 MB
+  p99: 396.43 MB
+  max: 396.43 MB
+
+NumGoroutine:
+  min: 37
+  mean: 38.85
+  p50: 38
+  p95: 43
+  p99: 68
+  max: 68
+
+PauseTotalNs:
+  min: 0 ns
+  mean: 2880253 ns
+  p50: 5420300 ns
+  p95: 5420300 ns
+  p99: 5420300 ns
+  max: 5420300 ns
+

@@ -21,7 +21,15 @@ var (
 func main() {
 	// 解析命令行参数
 	var runBenchmark bool
+	var runSustained bool
+	var sustainedDuration int
+	var sustainedConcurrency int
+	var sustainedBatch int
 	flag.BoolVar(&runBenchmark, "benchmark", false, "运行基准测试")
+	flag.BoolVar(&runSustained, "sustained", false, "运行持续写入基准测试")
+	flag.IntVar(&sustainedDuration, "sustained-duration", 300, "持续写入测试持续时间（秒），默认300s）")
+	flag.IntVar(&sustainedConcurrency, "sustained-concurrency", 10, "持续写入并发数，默认10")
+	flag.IntVar(&sustainedBatch, "sustained-batch", 1, "每次写入的批量大小，默认1")
 	flag.Parse()
 
 	fmt.Println("=== 智能工厂设备监控系统 ===")
@@ -106,6 +114,15 @@ func main() {
 		results := RunBenchmarks()
 		PrintBenchmarkResults(results)
 		fmt.Println("基准测试完成")
+		os.Exit(0)
+	}
+
+	// 持续写入基准（例如 5 分钟并发 10）
+	if runSustained {
+		fmt.Println("\n=== 开始持续写入基准测试 ===")
+		result := RunSustainedWrite(sustainedDuration, sustainedConcurrency, sustainedBatch)
+		PrintBenchmarkResults([]BenchmarkResult{result})
+		fmt.Println("持续写入基准测试完成")
 		os.Exit(0)
 	}
 
